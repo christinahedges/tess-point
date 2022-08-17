@@ -292,3 +292,139 @@ def cartToSphere(vec):
     ra = np.arctan2(vec[:, 1], vec[:, 0])
     ra = np.mod(ra, 2.0 * np.pi)
     return ra, dec
+
+
+def star_in_fov(lng, lat):
+    deg2rad = np.pi / 180.0
+    inView = False
+    if lat > 70.0:
+        vec = np.asarray(sphereToCart(lng, lat))
+        norm = np.sqrt(np.sum(vec ** 2, axis=1))
+        if norm > 0.0:
+            vec = vec / norm
+            xlen = np.abs(np.arctan(vec[0] / vec[2]))
+            ylen = np.abs(np.arctan(vec[1] / vec[2]))
+            if (xlen <= (12.5 * deg2rad)) and (ylen <= (12.5 * deg2rad)):
+                inView = True
+    return inView
+
+
+def make_az_asym(coords):
+    # I dont think we need this function at all in the specific tess case where
+    # asymang=0 asymfac=1
+    # We're rotating a matrix by 0, multiplying its x coord by 1
+    # and re-rotating by -0
+
+    asymang = 0.0
+    asymfac = 1.0
+    xyp = xyrotate(asymang, coords)
+    xypa = np.zeros_like(xyp)
+    xypa[0] = asymfac * xyp[0]
+    xypa[1] = xyp[1]
+    xyout = xyrotate(-asymang, xypa)
+    return xyout
+
+
+def optics_fp(lng_deg, lat_deg, opt_coeffs):
+    # Check Back Later For more Optimization
+    # angle to focal plane location, I think
+    # Had lines that recreated r_tanth, subbed the function in
+    # had np.power not **, speed v precision?  check r_tanth
+    deg2rad = np.pi / 180.0
+    thetar = np.pi / 2.0 - (lat_deg * deg2rad)
+
+    tanth = np.tan(thetar)
+    rtanth = r_of_tanth(tanth, opt_coeffs)
+
+    cphi = np.cos(deg2rad * lng_deg)
+    sphi = np.sin(deg2rad * lng_deg)
+
+    xyfp = np.zeros((2,), dtype=np.double)
+    xyfp[0] = -cphi * rtanth
+    xyfp[1] = -sphi * rtanth
+
+    return make_az_asym(xyfp)
+
+
+def xy_to_ccdpx(self, xy):
+    xyb = np.zeros_like(xy)
+    ccdpx = np.zeros_like(xy)
+    ccdx0 = tess_params[self.camera][f"x0_ccd{self.ccd}"]
+    ccdy0 = tess_params[self.camera][f"y0_ccd{self.ccd}"]
+    ccdang = tess_params[self.camera][f"ang_ccd{self.ccd}"]
+    pixsz = 0.015000
+
+    xyb[0] = xy[0] - ccdx0
+    xyb[1] = xy[1] - ccdy0
+    xyccd = xyrotate(ccdang, xyb)
+    ccdpx[0] = (xyccd[0] / pixsz) - 0.5
+    ccdpx[1] = (xyccd[1] / pixsz) - 0.5
+    return ccdpx
+
+def mm_to_pix(self, xy):
+    """Convert focal plane to pixel location also need to add in the
+        auxillary pixels added into FFIs
+    """
+    #created xy_to_ccdpix function to minimize repeated math
+    #re-indiced ccd for 1-4 vs 03 given the the change in tess_param
+    CCDWD_T = 2048
+    CCDHT_T = 2058
+    ROWA = 44
+    ROWB = 44
+    COLDK_T = 20
+    fitpx = np.zeros_like(xy)
+    if xy[0] >= 0.0:
+        if xy[1] >= 0.0:
+            self.ccd = 1
+            ccdpx = xy_to_ccdpx(self, xy,)
+            fitpx[0] = (CCDWD_T - ccdpx[0]) + CCDWD_T + 2 * ROWA + ROWB - 1.0
+            fitpx[1] = (CCDHT_T - ccdpx[1]) + CCDHT_T + 2 * COLDK_T - 1.0
+        else:
+            self.ccd = 4
+            ccdpx = xy_to_ccdpx(self, xy)
+            fitpx[0] = ccdpx[0] + CCDWD_T + 2 * ROWA + ROWB
+            fitpx[1] = ccdpx[1]
+    else:
+        if xy[1] >= 0.0:
+            self.ccd = 2
+            ccdpx = xy_to_ccdpx(self, xy)
+            fitpx[0] = (CCDWD_T - ccdpx[0]) + ROWA - 1.0
+            fitpx[1] = (CCDHT_T - ccdpx[1]) + CCDHT_T + 2 * COLDK_T - 1.0
+        else:
+            self.ccd = 3
+            ccdpx = xy_to_ccdpx(self, xy)
+            fitpx[0] = ccdpx[0] + ROWA
+            fitpx[1] = ccdpx[1]
+    return ccdpx, fitpx
+
+
+    def radec2pix(self, ras, decs):
+        """ After the rotation matrices are defined to the actual
+            ra and dec to pixel coords mapping
+        """
+        # removed pointing check since its now in the package
+        # vectorized
+        # like previous, doesn't return anything for things not in fov
+        # Old version - iterates each camera, checks FoV, assigns a ccd to them
+        # not sure how this works with the current OO-version,
+        # we're sending an array of ras,
+        # decs but have camera, ccd as an int property
+        #preserve vectorization - check each array against Fov, iterate per camera?
+        #NOT FUNCTIONAL
+        deg2rad = np.pi / 180.0
+        curVec = sphereToCart(ras, decs)
+        #rmat4 is camera dependant
+        camVec = np.matmul(self.rmat4.T, curVec.T).T
+        lng, lat = self.cartToSphere(camVec)
+        lng = lng / deg2rad
+        lat = lat / deg2rad
+        cut = star_in_fov(lng, lat)
+        if(cut):
+            lng=lng[cut]
+            lat=lat[cut]
+            xyfp = optics_fp(lng, lat, self.opt_coeffs)
+            ccdpx, fitpix = mm_to_pix(self,xyfp)
+            return inCamera, ccdNum, fitsxpos, fitsypos, ccdxpos, ccdypos
+        else:
+            print('No specified targets in Field of View')
+            return
