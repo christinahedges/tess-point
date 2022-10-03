@@ -1,7 +1,7 @@
 """Python vectorized version of tess-point"""
 import numpy as np
 from dataclasses import dataclass
-from . import PACKAGEDIR
+#from . import PACKAGEDIR
 
 __all__ = ["TESSPoint", "footprint"]
 
@@ -167,7 +167,78 @@ class TESSPoint:
         ra, dec = cartToSphere(curVec)
         return ra / (np.pi / 180.0), dec / (np.pi / 180.0)
 
+    def mm_to_pix(self, xy):
+        """Convert focal plane to pixel location also need to add in the
+            auxillary pixels added into FFIs """
+        #created xy_to_ccdpix function to minimize repeated math
+        #re-indiced ccd for 1-4 vs 03 given the the change in tess_param
+        CCDWD_T = 2048
+        CCDHT_T = 2058
+        ROWA = 44
+        ROWB = 44
+        COLDK_T = 20
+        fitpx = np.zeros_like(xy)
+        if xy[0] >= 0.0:
+            if xy[1] >= 0.0:
+                self.ccd = 1
+                ccdpx = xy_to_ccdpx(self, xy,)
+                fitpx[0] = (CCDWD_T - ccdpx[0]) + CCDWD_T + 2 * ROWA + ROWB - 1.0
+                fitpx[1] = (CCDHT_T - ccdpx[1]) + CCDHT_T + 2 * COLDK_T - 1.0
+            else:
+                self.ccd = 4
+                ccdpx = xy_to_ccdpx(self, xy)
+                fitpx[0] = ccdpx[0] + CCDWD_T + 2 * ROWA + ROWB
+                fitpx[1] = ccdpx[1]
+        else:
+            if xy[1] >= 0.0:
+                self.ccd = 2
+                ccdpx = xy_to_ccdpx(self, xy)
+                fitpx[0] = (CCDWD_T - ccdpx[0]) + ROWA - 1.0
+                fitpx[1] = (CCDHT_T - ccdpx[1]) + CCDHT_T + 2 * COLDK_T - 1.0
+            else:
+                self.ccd = 3
+                ccdpx = xy_to_ccdpx(self, xy)
+                fitpx[0] = ccdpx[0] + ROWA
+                fitpx[1] = ccdpx[1]
+        return ccdpx, fitpx
 
+    def radec2pix(self, coords):
+        """ After the rotation matrices are defined to the actual
+            ra and dec to pixel coords mapping
+        """
+        # removed pointing check since its now in the package
+        # vectorized
+        # like previous, doesn't return anything for things not in fov
+        # Old version - iterates each camera, checks FoV, assigns a ccd to them
+        # not sure how this works with the current OO-version,
+        # we're sending an array of ras,
+        # decs but have camera, ccd as an int property
+        #preserve vectorization - check each array against Fov, iterate per camera?
+        #NOT FUNCTIONAL
+        deg2rad = np.pi / 180.0
+        curVec = sphereToCart(coords[0],coords[1])
+        #rmat4 is camera dependant
+        #camVec = np.matmul(self.rmat4.T, curVec.T).T # curVec.T was giving an error?
+        camVec = np.matmul(self.rmat4.T, curVec).T
+
+        lng, lat = cartToSphere(camVec)
+        lng = lng / deg2rad
+        lat = lat / deg2rad
+        print(lng)
+        print(lat)
+        g=np.vectorize(star_in_fov) # this is lazy, look at re-writing star_in_fov
+        cut = g(lng, lat)
+        print(cut)
+        if(cut.any()):
+            lng=lng[cut]
+            lat=lat[cut]
+            xyfp = optics_fp(lng, lat, self.opt_coeffs)
+            ccdpx, fitpix = mm_to_pix(self,xyfp)
+            return inCamera, ccdNum, fitsxpos, fitsypos, ccdxpos, ccdypos
+        else:
+            print('No specified targets in Field of View')
+            return
+        
 def footprint(npoints=50):
     """Gets the column and row points for CCD edges"""
     column = np.hstack(
@@ -259,7 +330,7 @@ def sphereToCart(ras, decs):
     vec0s = cosras * cosdecs
     vec1s = sinras * cosdecs
     vec2s = sindecs
-    return vec0s, vec1s, vec2s
+    return np.array([vec0s, vec1s, vec2s])
 
 
 def eulerm323(eul):
@@ -362,9 +433,9 @@ def xy_to_ccdpx(self, xy):
     return ccdpx
 
 def mm_to_pix(self, xy):
-    """Convert focal plane to pixel location also need to add in the
-        auxillary pixels added into FFIs
-    """
+    # Convert focal plane to pixel location also need to add in the
+    #    auxillary pixels added into FFIs
+    #
     #created xy_to_ccdpix function to minimize repeated math
     #re-indiced ccd for 1-4 vs 03 given the the change in tess_param
     CCDWD_T = 2048
@@ -396,35 +467,4 @@ def mm_to_pix(self, xy):
             fitpx[0] = ccdpx[0] + ROWA
             fitpx[1] = ccdpx[1]
     return ccdpx, fitpx
-
-
-    def radec2pix(self, ras, decs):
-        """ After the rotation matrices are defined to the actual
-            ra and dec to pixel coords mapping
-        """
-        # removed pointing check since its now in the package
-        # vectorized
-        # like previous, doesn't return anything for things not in fov
-        # Old version - iterates each camera, checks FoV, assigns a ccd to them
-        # not sure how this works with the current OO-version,
-        # we're sending an array of ras,
-        # decs but have camera, ccd as an int property
-        #preserve vectorization - check each array against Fov, iterate per camera?
-        #NOT FUNCTIONAL
-        deg2rad = np.pi / 180.0
-        curVec = sphereToCart(ras, decs)
-        #rmat4 is camera dependant
-        camVec = np.matmul(self.rmat4.T, curVec.T).T
-        lng, lat = self.cartToSphere(camVec)
-        lng = lng / deg2rad
-        lat = lat / deg2rad
-        cut = star_in_fov(lng, lat)
-        if(cut):
-            lng=lng[cut]
-            lat=lat[cut]
-            xyfp = optics_fp(lng, lat, self.opt_coeffs)
-            ccdpx, fitpix = mm_to_pix(self,xyfp)
-            return inCamera, ccdNum, fitsxpos, fitsypos, ccdxpos, ccdypos
-        else:
-            print('No specified targets in Field of View')
-            return
+    
