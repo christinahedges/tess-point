@@ -1,8 +1,7 @@
 """Python vectorized version of tess-point"""
 import numpy as np
 from dataclasses import dataclass
-#from . import PACKAGEDIR
-
+from . import PACKAGEDIR
 __all__ = ["TESSPoint", "footprint"]
 
 pointings = {
@@ -211,21 +210,21 @@ class TESSPoint:
         # like previous, doesn't return anything for things not in fov
         # Old version - iterates each camera, checks FoV, assigns a ccd to them
         # not sure how this works with the current OO-version,
-        # we're sending an array of ras,
+        # we're sending an array of ras,decs
         # decs but have camera, ccd as an int property
         #preserve vectorization - check each array against Fov, iterate per camera?
         #NOT FUNCTIONAL
         deg2rad = np.pi / 180.0
-        curVec = sphereToCart(coords[0],coords[1])
+        curVec = np.asarray(sphereToCart(coords[0],coords[1]),dtype=np.double).T
         #rmat4 is camera dependant
         #camVec = np.matmul(self.rmat4.T, curVec.T).T # curVec.T was giving an error?
-        camVec = np.matmul(self.rmat4.T, curVec).T
+        camVec = np.matmul(self.rmat4, curVec.T)
 
         lng, lat = cartToSphere(camVec)
         lng = lng / deg2rad
         lat = lat / deg2rad
-        print(lng)
-        print(lat)
+        #print(lng)
+        #print(lat)
         g=np.vectorize(star_in_fov) # this is lazy, look at re-writing star_in_fov
         cut = g(lng, lat)
         print(cut)
@@ -330,7 +329,7 @@ def sphereToCart(ras, decs):
     vec0s = cosras * cosdecs
     vec1s = sinras * cosdecs
     vec2s = sindecs
-    return np.array([vec0s, vec1s, vec2s])
+    return vec0s, vec1s, vec2s
 
 
 def eulerm323(eul):
@@ -467,4 +466,3 @@ def mm_to_pix(self, xy):
             fitpx[0] = ccdpx[0] + ROWA
             fitpx[1] = ccdpx[1]
     return ccdpx, fitpx
-    
