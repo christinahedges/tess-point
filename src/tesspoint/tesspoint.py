@@ -1,8 +1,11 @@
 """Python vectorized version of tess-point"""
 import numpy as np
+import logging
 from dataclasses import dataclass
 from . import PACKAGEDIR
 __all__ = ["TESSPoint", "footprint"]
+
+logging.basicConfig(level=logging.DEBUG)
 
 pointings = {
     key: col
@@ -215,25 +218,40 @@ class TESSPoint:
         #preserve vectorization - check each array against Fov, iterate per camera?
         #NOT FUNCTIONAL
         deg2rad = np.pi / 180.0
-        curVec = np.asarray(sphereToCart(coords[0],coords[1]),dtype=np.double).T
+        curVec = np.asarray(sphereToCart(coords[:,0],coords[:,1]),dtype=np.double)
+        logging.debug("radec2pix: curVec: {0}".format(curVec.T))
+        logging.debug("radec2pix: curVec Shape: {0}".format(curVec.T.shape))
+
         #rmat4 is camera dependant
         #camVec = np.matmul(self.rmat4.T, curVec.T).T # curVec.T was giving an error?
-        camVec = np.matmul(self.rmat4, curVec.T)
+        camVec = np.matmul(self.rmat4, curVec)
+        logging.debug("radec2pix: camVec: {0}".format(camVec))
+        logging.debug("radec2pix: camVec Shape: {0}".format(camVec.shape))
 
-        lng, lat = cartToSphere(camVec)
+        lng, lat = cartToSphere(camVec.T)
         lng = lng / deg2rad
         lat = lat / deg2rad
-        #print(lng)
-        #print(lat)
+        logging.debug("radec2pix: lng: {0}".format(lng))
+        logging.debug("radec2pix: lat: {0}".format(lat))
+
         g=np.vectorize(star_in_fov) # this is lazy, look at re-writing star_in_fov
-        cut = g(lng, lat)
-        print(cut)
+        # Actually, in our current spec where we know sector, camera, ccd
+        # is this a nescessary check? 
+
+        cut = g(lng,lat)
+
         if(cut.any()):
             lng=lng[cut]
             lat=lat[cut]
             xyfp = optics_fp(lng, lat, self.opt_coeffs)
+            logging.debug("radec2pix: xyfp: {0}".format(xyfp))
+            logging.debug("radec2pix: xyfp Shape: {0}".format(xyfp.shape))
             ccdpx, fitpix = mm_to_pix(self,xyfp)
-            return inCamera, ccdNum, fitsxpos, fitsypos, ccdxpos, ccdypos
+            logging.debug("radec2pix: xyfp: {0}".format(xyfp))
+            logging.debug("radec2pix: ccdpx: {0}".format(ccdpx))
+            logging.debug("radec2pix: fitpx: {0}".format(fitpix))
+            #return inCamera, ccdNum, fitsxpos, fitsypos, ccdxpos, ccdypos
+            return fitpix2pix(fitpix,ccdpx)
         else:
             print('No specified targets in Field of View')
             return
@@ -357,19 +375,25 @@ def rotm1(ax, angle):
 
 
 def cartToSphere(vec):
-    norm = np.sqrt(np.sum(vec ** 2, axis=1))
-    dec = np.arcsin(vec[:, 2] / norm)
-    ra = np.arctan2(vec[:, 1], vec[:, 0])
-    ra = np.mod(ra, 2.0 * np.pi)
-    return ra, dec
-
+#   print("cartToSphere: vec: {0}".format(vec)) )# axis=1 breaking for 1 ra dec only
+#   norm = np.sqrt(np.sum(vec ** 2))
+#   dec = np.arcsin(vec[ 2] / norm)
+#   ra = np.arctan2(vec[ 1], vec[0])
+#   ra = np.mod(ra, 2.0 * np.pi)
+#breaking for 1 coord only, fix later
+   logging.debug("cartToSphere: vec: {0}".format(vec))
+   norm = np.sqrt(np.sum(vec ** 2, axis=1))
+   dec = np.arcsin(vec[:, 2] / norm)
+   ra = np.arctan2(vec[:, 1], vec[:, 0])
+   ra = np.mod(ra, 2.0 * np.pi)
+   return ra, dec
 
 def star_in_fov(lng, lat):
     deg2rad = np.pi / 180.0
     inView = False
     if lat > 70.0:
         vec = np.asarray(sphereToCart(lng, lat))
-        norm = np.sqrt(np.sum(vec ** 2, axis=1))
+        norm = np.sqrt(np.sum(vec ** 2))
         if norm > 0.0:
             vec = vec / norm
             xlen = np.abs(np.arctan(vec[0] / vec[2]))
@@ -388,9 +412,12 @@ def make_az_asym(coords):
     asymang = 0.0
     asymfac = 1.0
     xyp = xyrotate(asymang, coords)
+    logging.debug("make_az_asym: xyp: {0}".format(xyp))
+    logging.debug("make_az_asym: xyp: shape:  {0}".format(xyp.shape))
+
     xypa = np.zeros_like(xyp)
-    xypa[0] = asymfac * xyp[0]
-    xypa[1] = xyp[1]
+    xypa[:,0] = asymfac * xyp[:,0]
+    xypa[:,1] = xyp[:,1]
     xyout = xyrotate(-asymang, xypa)
     return xyout
 
@@ -403,15 +430,19 @@ def optics_fp(lng_deg, lat_deg, opt_coeffs):
     deg2rad = np.pi / 180.0
     thetar = np.pi / 2.0 - (lat_deg * deg2rad)
 
-    tanth = np.tan(thetar)
-    rtanth = r_of_tanth(tanth, opt_coeffs)
+    rtanth = r_of_tanth(thetar, opt_coeffs)
+
+    logging.debug("optics_fp: rtanth: {0}".format(rtanth))
 
     cphi = np.cos(deg2rad * lng_deg)
     sphi = np.sin(deg2rad * lng_deg)
-
-    xyfp = np.zeros((2,), dtype=np.double)
-    xyfp[0] = -cphi * rtanth
-    xyfp[1] = -sphi * rtanth
+    logging.debug("optics_fp: cphi: {0}".format(cphi))
+    logging.debug("optics_fp: sphi: {0}".format(sphi))
+    xyfp = np.zeros((len(lng_deg),2), dtype=np.double)
+    xyfp[:,0] = -cphi * rtanth
+    xyfp[:,1] = -sphi * rtanth
+    logging.debug("optics_fp: xyfp: {0}".format(xyfp))
+    logging.debug("optics_fp: xyfp shape: {0}".format(xyfp.shape))
 
     return make_az_asym(xyfp)
 
@@ -424,11 +455,11 @@ def xy_to_ccdpx(self, xy):
     ccdang = tess_params[self.camera][f"ang_ccd{self.ccd}"]
     pixsz = 0.015000
 
-    xyb[0] = xy[0] - ccdx0
-    xyb[1] = xy[1] - ccdy0
+    xyb[:,0] = xy[:,0] - ccdx0
+    xyb[:,1] = xy[:,1] - ccdy0
     xyccd = xyrotate(ccdang, xyb)
-    ccdpx[0] = (xyccd[0] / pixsz) - 0.5
-    ccdpx[1] = (xyccd[1] / pixsz) - 0.5
+    ccdpx[:,0] = (xyccd[:,0] / pixsz) - 0.5
+    ccdpx[:,1] = (xyccd[:,1] / pixsz) - 0.5
     return ccdpx
 
 def mm_to_pix(self, xy):
@@ -443,26 +474,47 @@ def mm_to_pix(self, xy):
     ROWB = 44
     COLDK_T = 20
     fitpx = np.zeros_like(xy)
-    if xy[0] >= 0.0:
-        if xy[1] >= 0.0:
-            self.ccd = 1
-            ccdpx = xy_to_ccdpx(self, xy,)
-            fitpx[0] = (CCDWD_T - ccdpx[0]) + CCDWD_T + 2 * ROWA + ROWB - 1.0
-            fitpx[1] = (CCDHT_T - ccdpx[1]) + CCDHT_T + 2 * COLDK_T - 1.0
-        else:
-            self.ccd = 4
-            ccdpx = xy_to_ccdpx(self, xy)
-            fitpx[0] = ccdpx[0] + CCDWD_T + 2 * ROWA + ROWB
-            fitpx[1] = ccdpx[1]
-    else:
-        if xy[1] >= 0.0:
-            self.ccd = 2
-            ccdpx = xy_to_ccdpx(self, xy)
-            fitpx[0] = (CCDWD_T - ccdpx[0]) + ROWA - 1.0
-            fitpx[1] = (CCDHT_T - ccdpx[1]) + CCDHT_T + 2 * COLDK_T - 1.0
-        else:
-            self.ccd = 3
-            ccdpx = xy_to_ccdpx(self, xy)
-            fitpx[0] = ccdpx[0] + ROWA
-            fitpx[1] = ccdpx[1]
+    logging.debug("mm_to_pix: fitpx: {0}".format(fitpx))
+    logging.debug("mm_to_pix: fitpx.shape: {0}".format(fitpx.shape))
+
+
+    if self.ccd == 1:
+        ccdpx = xy_to_ccdpx(self, xy,)
+        fitpx[:,0] = (CCDWD_T - ccdpx[:,0]) + CCDWD_T + 2 * ROWA + ROWB - 1.0
+        fitpx[:,1] = (CCDHT_T - ccdpx[:,1]) + CCDHT_T + 2 * COLDK_T - 1.0
+    if self.ccd == 4:
+        ccdpx = xy_to_ccdpx(self, xy)
+        fitpx[:,0] = ccdpx[:,0] + CCDWD_T + 2 * ROWA + ROWB
+        fitpx[:,1] = ccdpx[:,1]
+    if self.ccd == 2:
+        ccdpx = xy_to_ccdpx(self, xy)
+        fitpx[:,0] = (CCDWD_T - ccdpx[:,0]) + ROWA - 1.0
+        fitpx[:,1] = (CCDHT_T - ccdpx[:,1]) + CCDHT_T + 2 * COLDK_T - 1.0
+    if self.ccd == 3:
+        ccdpx = xy_to_ccdpx(self, xy)
+        fitpx[:,0] = ccdpx[:,0] + ROWA
+        fitpx[:,1] = ccdpx[:,1]
+
     return ccdpx, fitpx
+
+def fitpix2pix(fitpix,ccdpx):
+    # SPOC calibrated FFIs have 44 collateral pixels in x and are 1 based  
+    # Assuming combinedFits = False & args.noCollateral = False (for Now)
+    xyUse = np.zeros(ccdpx.shape)
+    logging.debug("fitpix2pix: ccdpx: shape: {0}".format(ccdpx.shape))
+
+    xyUse[:,0] = ccdpx[:,0] + 45.0
+    xyUse[:,1] = ccdpx[:,1] + 1.0
+    xMin = 44.0
+    ymaxCoord = 2049
+    xmaxCoord = 2093
+    # visCut = xyUse[:,0]>xMin & xyUse[:,1]>0 & xyUse[:,0]<xmaxCoord & xyUse[:,1]<ymaxCoord
+    visCut=True
+    logging.debug("fitpix2pix: visCut: {0}".format(visCut))
+
+    if visCut: # only reun if everything is valid.  should this be any and just run on what passes?
+        findAny=True
+        edgeWarn = np.zeros(len(xyUse[:,0]))
+        edgePix = 6
+        edgeWarn = (xyUse[:,0]<=(xMin+edgePix)) | (xyUse[:,0]>=(xmaxCoord-edgePix)) | (xyUse[:,1]<=edgePix) | (xyUse[:,1]==(ymaxCoord-edgePix))
+    return xyUse, edgeWarn
