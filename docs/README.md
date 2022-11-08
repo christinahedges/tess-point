@@ -1,6 +1,6 @@
 # This branch contains a vectorized version of `tess-point`!
 
-# To-DO list from Tyler
+## To-DO list from Tyler
 ### We now have a complete pixel->radec & ra-dec->pixel transform for a given camera, sector, ccd
 ### This represents the 'guts' of the work being done, however, significant modifications remain.  These include:
 - For the pixel Row, Column it is reasonable to assume you know the camera/sector/ccd.  However, for the RA, Dec case it is only reasonable to assume that you know the sector (if that?).  Right now, the TESSPoint class needs a camera, sector, ccd - we need a parent-class that can take a generic ra, dec and check visibility across camera, ccd's (for a given sector), and then create the approporiate TESSPoint class from this information.  We may (do we?) want the sector input to be optional, at which point it could do this across sectors as well.  star_in_fov() is essentially the visibility check, see below.  
@@ -10,13 +10,13 @@
 
 
 - General cleanup and optimization:
-	- Right now I'm using a np.vectorize(star_in_fov) ir radec2pix because a: I'm lazy, but mostly b: its not clear that this check should be in TESSPoint class it currently is, but should probably get moved to the parent class described above and the check should happen there
-	- there are sone functions or lines that may not need to exist.  I'm looking at you,  make_az_asym()
-	- there are lots of deg2rad variables  (and vice-versa) that sould be replaced with actual units calls, but I was copying the legacy code and didn't think about it
-	- speaking of which, variable names need a pass - re-used lots of the ones from chris which aren't bad but are also not the most descriptive if you don't have the math in front of you
-	- need to do checks on speed & accuracy & make sure the speedup Christina demonstrated is maintained in this version
-	- There are a few inconsistencies with input/output - I pattered radec->pix off Christina's pix-> ra,dec so it needs a Nx2 numpy array input, and I think that is the output for radec2pix, but I think pix2radec outputs a tuple or somethoing slightly different as I had to tweak the output when doinng the footpring tests.  we should also write some smarter parsing code that will read what the user inputs and format it correctly/ give more options for input, especially in the case of only calculating a single point.  
-	- We should codify some tests for accuracy & speed.  One test for accuracy: we could use old tessplint to create a bunch of input/output files from footprints and then write some tests to try and reproduce them and look for overall deviation/variance
+	- Right now I'm using a np.vectorize(star_in_fov) ir radec2pix because a: I'm lazy, but mostly b: its not clear that this check should be in the current TESSPoint class it currently is in.  It should probably get moved to the futue, theoretical parent class described above and the check should happen there.  Or maybe in both places depending on our speed vs redundancy cares.  
+	- Rhere are sone functions or lines that may not need to exist.  I'm looking at you,  make_az_asym(), which I think does nothing.  
+	- There are lots of unit-converting deg2rad variables  (and vice-versa) that sould be replaced with actual units calls, but I was copying the legacy code and didn't think about it
+	- Similarily, variable names need a pass - re-used lots of the ones from the main b ranch which aren't bad but are also not the most descriptive if you don't have the math in front of you
+	- We need to do checks on speed & accuracy & make sure the speedup Christina demonstrated is maintained in this version.  I've done some preliminary accuracy tests in mwe-test.ipynb
+	- There are a few inconsistencies with input/output - I patterned the radec->pix input off of Christina's pix-> ra,dec so it needs a Nx2 numpy array input, and I think that is the output for radec2pix, but I think Christina's pix2radec outputs a tuple or somethoing slightly different as I had to tweak the output when doinng the footpring tests. We should decide on our format and ensure consistancy. We should also write some smarter parsing code that will read what the user inputs and format it correctly/ give more options for input, especially in the case of only calculating a single point so that people can do (current) radec2pix([[a,b]])=radec2pix((a,b))=radec2pix(ra=a,dec=b) or whatever inputs we think are reasonable.  
+	- We should codify some tests for accuracy & speed.  One test for accuracy: we could use old tessplint to create a bunch of input/output files from footprints and then write some tests to try and reproduce them and look for overall deviation/variance across all cam/sect/ccd
 
 This is an attempt to 1) make this tool faster by using Python niceties 2) make the API for this tool easier for Python users. Making the tool faster also means we can do calculations on the fly for updating interactive plots.
 
