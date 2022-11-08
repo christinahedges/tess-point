@@ -236,7 +236,7 @@ class TESSPoint:
 
         g=np.vectorize(star_in_fov) # this is lazy, look at re-writing star_in_fov
         # Actually, in our current spec where we know sector, camera, ccd
-        # is this a nescessary check? 
+        # is this a nescessary check? move to parent class?
 
         cut = g(lng,lat)
 
@@ -500,6 +500,8 @@ def mm_to_pix(self, xy):
 def fitpix2pix(fitpix,ccdpx):
     # SPOC calibrated FFIs have 44 collateral pixels in x and are 1 based  
     # Assuming combinedFits = False & args.noCollateral = False (for Now)
+    # In OG stars2px, xyUse choses between a few options depending on flags
+    # passed to stars2px, here we're making assumptions and will generalize after
     xyUse = np.zeros(ccdpx.shape)
     logging.debug("fitpix2pix: ccdpx: shape: {0}".format(ccdpx.shape))
 
