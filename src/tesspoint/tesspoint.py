@@ -2,6 +2,7 @@
 import numpy as np
 import logging
 from dataclasses import dataclass
+import scipy.optimize as opt
 from . import PACKAGEDIR
 __all__ = ["TESSPoint", "footprint"]
 
@@ -152,7 +153,7 @@ class TESSPoint:
     def pix_to_mm(self, coords):
         """convert pixel to mm focal plane position"""
         pixsz = 0.015000
-        angle = tess_params[self.camera][f"ang_ccd{self.ccd}"]
+        angle = -tess_params[self.camera][f"ang_ccd{self.ccd}"]
         xyb = xyrotate(angle, (coords + 0.5) * pixsz)
         return np.vstack(
             [
@@ -299,7 +300,7 @@ def r_of_tanth(z, opt_coeffs):
     return rfp0 * rfp
 
 
-def tanth_of_r(rfp_times_rfp0, opt_coeffs):
+def tanth_of_r_noscipy(rfp_times_rfp0, opt_coeffs):
     zi = np.arctan(rfp_times_rfp0 ** 0.5 / opt_coeffs[0])
     # Minimize...
     # This is a way to minimize that
@@ -325,13 +326,34 @@ def tanth_of_r(rfp_times_rfp0, opt_coeffs):
     # ----
     return xmin + zi
 
+def tanth_of_r(rfp_times_rfp0, opt_coeffs):
+    logging.debug("tanth_of_r: opt_coeffs: {0}".format(opt_coeffs))
+    if np.abs(rfp_times_rfp0) > 1.0e-10:
+        c0 = opt_coeffs[0]
+        zi = np.arctan(np.sqrt(rfp_times_rfp0) / c0)
+        def minFunc(z, opt_coeffs, rfp_times_rfp0):
+            rtmp = r_of_tanth(z, opt_coeffs)
+            return (rtmp - rfp_times_rfp0) ** 2
+        
+        optResult = opt.minimize(minFunc, [zi], \
+                                 args=(opt_coeffs, rfp_times_rfp0), method='Nelder-Mead', \
+                                 tol=1.0e-10, \
+                                 options={'maxiter':500})
+        #print(optResult)
+        return optResult.x[0]
+    else:
+        return 0.0
 
 def fp_optics(xyfp, opt_coeffs):
+    logging.debug("fp_optics: opt_coeffs: {0}".format(opt_coeffs))
+
+    tanth_of_r_vectorize=np.vectorize(tanth_of_r, excluded=[1])
+
     xy = rev_az_asym(xyfp)
     rfp_times_rfp0 = np.sum(xy ** 2, axis=1) ** 0.5
     phirad = np.arctan2(-xy[:, 1], -xy[:, 0])
     phideg = phirad / (np.pi / 180.0) % 360
-    thetarad = tanth_of_r(rfp_times_rfp0, opt_coeffs)
+    thetarad = tanth_of_r_vectorize(rfp_times_rfp0, opt_coeffs)
     thetadeg = thetarad / (np.pi / 180.0)
     return phideg, 90.0 - thetadeg
 
