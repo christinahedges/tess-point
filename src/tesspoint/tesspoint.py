@@ -1,544 +1,201 @@
-"""Python vectorized version of tess-point"""
-import numpy as np
-import logging
 from dataclasses import dataclass
-import scipy.optimize as opt
+from typing import Optional, List
+
+from tesspoint import TESSPointSCC
 from . import PACKAGEDIR
-__all__ = ["TESSPoint", "footprint"]
 
-logging.basicConfig(level=logging.DEBUG)
-
-pointings = {
-    key: col
-    for col, key in zip(
-        np.loadtxt(f"{PACKAGEDIR}/data/pointings.csv", delimiter=",", skiprows=1).T,
-        np.loadtxt(
-            f"{PACKAGEDIR}/data/pointings.csv", delimiter=",", max_rows=1, dtype=str
-        ),
-    )
-}
-
-tess_params = {
-    1: {
-        "ang1": 0.101588,
-        "ang2": -36.022035,
-        "ang3": 90.048315,
-        "fl": 145.948116,
-        "opt_coef1": 1.00000140,
-        "opt_coef2": 0.24779006,
-        "opt_coef3": -0.22681254,
-        "opt_coef4": 10.78243356,
-        "opt_coef5": -34.97817276,
-        "x0_ccd1": 31.573417,
-        "y0_ccd1": 31.551637,
-        "ang_ccd1": 179.980833,
-        "x0_ccd2": -0.906060,
-        "y0_ccd2": 31.536148,
-        "ang_ccd2": 180.000000,
-        "x0_ccd3": -31.652818,
-        "y0_ccd3": -31.438350,
-        "ang_ccd3": -0.024851,
-        "x0_ccd4": 0.833161,
-        "y0_ccd4": -31.458180,
-        "ang_ccd4": 0.001488,
-    },
-    2: {
-        "ang1": -0.179412,
-        "ang2": -12.017260,
-        "ang3": 90.046500,
-        "fl": 145.989933,
-        "opt_coef1": 1.00000140,
-        "opt_coef2": 0.24069345,
-        "opt_coef3": 0.15391120,
-        "opt_coef4": 4.05433503,
-        "opt_coef5": 3.43136895,
-        "x0_ccd1": 31.653635,
-        "y0_ccd1": 31.470291,
-        "ang_ccd1": 180.010890,
-        "x0_ccd2": -0.827405,
-        "y0_ccd2": 31.491388,
-        "ang_ccd2": 180.000000,
-        "x0_ccd3": -31.543794,
-        "y0_ccd3": -31.550699,
-        "ang_ccd3": -0.006624,
-        "x0_ccd4": 0.922834,
-        "y0_ccd4": -31.557268,
-        "ang_ccd4": -0.015464,
-    },
-    3: {
-        "ang1": 0.066596,
-        "ang2": 12.007750,
-        "ang3": -89.889085,
-        "fl": 146.006602,
-        "opt_coef1": 1.00000140,
-        "opt_coef2": 0.23452229,
-        "opt_coef3": 0.33552009,
-        "opt_coef4": 1.92009863,
-        "opt_coef5": 12.48880182,
-        "x0_ccd1": 31.615486,
-        "y0_ccd1": 31.413644,
-        "ang_ccd1": 179.993948,
-        "x0_ccd2": -0.832993,
-        "y0_ccd2": 31.426621,
-        "ang_ccd2": 180.000000,
-        "x0_ccd3": -31.548296,
-        "y0_ccd3": -31.606976,
-        "ang_ccd3": 0.000298,
-        "x0_ccd4": 0.896018,
-        "y0_ccd4": -31.569542,
-        "ang_ccd4": -0.006464,
-    },
-    4: {
-        "ang1": 0.030756,
-        "ang2": 35.978116,
-        "ang3": -89.976802,
-        "fl": 146.039793,
-        "opt_coef1": 1.00000140,
-        "opt_coef2": 0.23920416,
-        "opt_coef3": 0.13349450,
-        "opt_coef4": 4.77768896,
-        "opt_coef5": -1.75114744,
-        "x0_ccd1": 31.575820,
-        "y0_ccd1": 31.316510,
-        "ang_ccd1": 179.968217,
-        "x0_ccd2": -0.890877,
-        "y0_ccd2": 31.363511,
-        "ang_ccd2": 180.000000,
-        "x0_ccd3": -31.630470,
-        "y0_ccd3": -31.716942,
-        "ang_ccd3": -0.024359,
-        "x0_ccd4": 0.824159,
-        "y0_ccd4": -31.728751,
-        "ang_ccd4": -0.024280,
-    },
-}
-
+import numpy as np
+__all__ = ["TESSPoint"]
 
 @dataclass
-class TESSPoint:
-    sector: int
-    camera: int
-    ccd: int
-
+class TESSPoint(object):    
+    id : Optional[list] = None # ID assosciated with each pixel/coordinate - could be TIC or arbitrary for bookeeping
+    coord : Optional[list] = None # SkyCoord?
+    ra : Optional[list] = None
+    dec : Optional[list] = None
+    row : Optional[list] = None
+    column : Optional[list] = None
+    targetname : Optional[list] = None
+    filename : Optional[str] = None
+    
+    coord_type : Optional[str] = None # keep track of if we're going from radec-> pix or pix->radec 
+    obsSector : Optional[list] = None # keep track of Sectors assosciated with transformations
+    obsCamera : Optional[list] = None # keep track of Cameras assosciated with transformations
+    obsCCD : Optional[list] = None # keep track of CCDs assosciated with transformations
+    obsId : Optional[list] = None # Keep track of Ids assosciated with transformations
+    _sector_max: Optional[int] = -1 # Will read from pointings.csv to grab the default max from the last line
+    _sector_min: Optional[int] = 1
+    _camera_max: Optional[int] = 4
+    _camera_min: Optional[int] = 1
+    _ccd_max: Optional[int] = 4
+    _ccd_min: Optional[int] = 1
+    
     def __post_init__(self):
-        xeul = np.hstack(
-            [
-                (np.pi / 180.0) * pointings["ra"][pointings["sector"] == self.sector],
-                np.pi / 2.0
-                - (np.pi / 180.0)
-                * pointings["dec"][pointings["sector"] == self.sector],
-                (np.pi / 180.0) * pointings["roll"][pointings["sector"] == self.sector]
-                + np.pi,
-            ]
-        )
-
-        self.rmat1 = eulerm323(xeul)
-        eulcam = np.asarray(
-            [tess_params[self.camera][f"ang{idx}"] for idx in np.arange(1, 4)]
-        )
-        self.rmat2 = eulerm323(eulcam * (np.pi / 180.0))
-        self.rmat4 = np.matmul(self.rmat2, self.rmat1)
-
-    @property
-    def opt_coeffs(self):
-        return np.asarray(
-            [
-                tess_params[self.camera][key]
-                for key in np.hstack(
-                    [["fl"], [f"opt_coef{idx}" for idx in np.arange(1, 6)]]
-                )
-            ]
-        )
-
-    def pix_to_mm(self, coords):
-        """convert pixel to mm focal plane position"""
-        pixsz = 0.015000
-        angle = -tess_params[self.camera][f"ang_ccd{self.ccd}"]
-        xyb = xyrotate(angle, (coords + 0.5) * pixsz)
-        return np.vstack(
-            [
-                xyb[:, 0] + tess_params[self.camera][f"x0_ccd{self.ccd}"],
-                xyb[:, 1] + tess_params[self.camera][f"y0_ccd{self.ccd}"],
-            ]
-        ).T
-
-    def pix2radec(self, coords):
-        xyfp = self.pix_to_mm(coords)
-        lng_deg, lat_deg = fp_optics(xyfp, self.opt_coeffs)
-        vcam = np.asarray(sphereToCart(lng_deg, lat_deg)).T
-        curVec = np.matmul(self.rmat4.T, vcam.T).T
-        ra, dec = cartToSphere(curVec)
-        return ra / (np.pi / 180.0), dec / (np.pi / 180.0)
-
-    def mm_to_pix(self, xy):
-        """Convert focal plane to pixel location also need to add in the
-            auxillary pixels added into FFIs """
-        #created xy_to_ccdpix function to minimize repeated math
-        #re-indiced ccd for 1-4 vs 03 given the the change in tess_param
-        CCDWD_T = 2048
-        CCDHT_T = 2058
-        ROWA = 44
-        ROWB = 44
-        COLDK_T = 20
-        fitpx = np.zeros_like(xy)
-        if xy[0] >= 0.0:
-            if xy[1] >= 0.0:
-                self.ccd = 1
-                ccdpx = xy_to_ccdpx(self, xy,)
-                fitpx[0] = (CCDWD_T - ccdpx[0]) + CCDWD_T + 2 * ROWA + ROWB - 1.0
-                fitpx[1] = (CCDHT_T - ccdpx[1]) + CCDHT_T + 2 * COLDK_T - 1.0
-            else:
-                self.ccd = 4
-                ccdpx = xy_to_ccdpx(self, xy)
-                fitpx[0] = ccdpx[0] + CCDWD_T + 2 * ROWA + ROWB
-                fitpx[1] = ccdpx[1]
+        if self.targetname is not None:
+            self._read_name()
+        elif self.filename is not None:
+            self._read_csv()
+        elif self.coord is not None:
+            self._read_skycoord()
+        if ((not self.column) and (not self.row)):
+            # Assuming that we're working from Sky Coordinates and going to pixels now since we did not pass a pixel column, row 
+            self.coord_type="radec"
+            if(isinstance(self.ra,list)):
+                self.ra=np.array(self.ra)
+            if(isinstance(self.dec,list)):
+                self.dec=np.array(self.dec)
+        elif(len(self.column) == len(self.row)):
+            # Assuming that we're working from Pixel and goint to Sky Coordinates since we did pass a pixel column, row 
+            self.coord_type="pixels"
         else:
-            if xy[1] >= 0.0:
-                self.ccd = 2
-                ccdpx = xy_to_ccdpx(self, xy)
-                fitpx[0] = (CCDWD_T - ccdpx[0]) + ROWA - 1.0
-                fitpx[1] = (CCDHT_T - ccdpx[1]) + CCDHT_T + 2 * COLDK_T - 1.0
+            raise ValueError("Input mismatch")# is this the flag we want?
+        if(self._sector_max == -1):
+            # Will read from pointings.csv to grab the default maximum sector from the last line
+            with open(f"{PACKAGEDIR}/data/pointings.csv") as pointings_file:
+                lines=pointings_file.readlines()
+            self._sector_max == lines[-1].split(",")[0]
+        self.validate()
+    
+    def _read_skycoord(self):
+        if isinstance(self.coord, list):
+            if isinstance(self.coord[0], SkyCoord):
+                self.coord = SkyCoord(self.coord)
             else:
-                self.ccd = 3
-                ccdpx = xy_to_ccdpx(self, xy)
-                fitpx[0] = ccdpx[0] + ROWA
-                fitpx[1] = ccdpx[1]
-        return ccdpx, fitpx
+                raise ValueError("Must pass either a `astropy.coordinate.SkyCoord` object or a list of `astropy.coordinate.SkyCoord` objects to `coord`")
+        elif not isinstance(self.coord, SkyCoord):
+            raise ValueError("Must pass either a `astropy.coordinate.SkyCoord` object or a list of `astropy.coordinate.SkyCoord` objects to `coord`")
+        if len(self.coord.shape) == 0:
+            self.coord = SkyCoord([self.coord])
+        self.ra, self.dec =  self.coord.ra.deg, self.coord.dec.deg
+    
+    def _read_name(self):
+        if isinstance(self.targetname, str):
+            c = SkyCoord.from_name(self.targetname)
+            self.ra, self.dec = c.ra.deg, c.dec.deg
+        elif isinstance(self.targetname, (list, np.ndarray)):
+            self.ra, self.dec = [], []
+            for name in self.targetname:
+                c = SkyCoord.from_name(name)
+                self.ra.append(c.ra.deg)
+                self.dec.append(c.dec.deg)
+    
+    def _read_csv(self):
+        df = pd.read_csv(self.filename)
+        cols = np.asarray([c.lower().strip() for c in df.columns])
+        if np.any(cols == 'col'):
+            cols[cols == 'col'] = 'column'
+        
+        if not np.in1d(['ra', 'dec', 'row', 'column'], cols).any():
+            raise ValueError('Must pass a dataframe with column headers of "ra", "dec", "column", or "row".')
+        
+        [setattr(self, attr, np.asarray(df[attr])) for attr in ['ra', 'dec', 'row', 'column'] if attr in cols]
+        
+        
+    def validate(self):
+        attrs = np.asarray(['ra', 'dec', 'row', 'column'])
+        
+        isnone = np.asarray([getattr(self, attr) is None for attr in attrs])
+        # Passed in something
+        if isnone.all():
+            raise ValueError(f"Must pass either RA and Dec, Column and Row, a target name, or a filename.")
 
-    def radec2pix(self, coords):
-        """ After the rotation matrices are defined to the actual
-            ra and dec to pixel coords mapping
-        """
-        # removed pointing check since its now in the package
-        # vectorized
-        # like previous, doesn't return anything for things not in fov
-        # Old version - iterates each camera, checks FoV, assigns a ccd to them
-        # not sure how this works with the current OO-version,
-        # we're sending an array of ras,decs
-        # decs but have camera, ccd as an int property
-        #preserve vectorization - check each array against Fov, iterate per camera?
-        #NOT FUNCTIONAL
-        deg2rad = np.pi / 180.0
-        curVec = np.asarray(sphereToCart(coords[:,0],coords[:,1]),dtype=np.double)
-        logging.debug("radec2pix: curVec: {0}".format(curVec.T))
-        logging.debug("radec2pix: curVec Shape: {0}".format(curVec.T.shape))
-
-        #rmat4 is camera dependant
-        #camVec = np.matmul(self.rmat4.T, curVec.T).T # curVec.T was giving an error?
-        camVec = np.matmul(self.rmat4, curVec)
-        logging.debug("radec2pix: camVec: {0}".format(camVec))
-        logging.debug("radec2pix: camVec Shape: {0}".format(camVec.shape))
-
-        lng, lat = cartToSphere(camVec.T)
-        lng = lng / deg2rad
-        lat = lat / deg2rad
-        logging.debug("radec2pix: lng: {0}".format(lng))
-        logging.debug("radec2pix: lat: {0}".format(lat))
-
-        g=np.vectorize(star_in_fov) # this is lazy, look at re-writing star_in_fov
-        # Actually, in our current spec where we know sector, camera, ccd
-        # is this a nescessary check? move to parent class?
-
-        cut = g(lng,lat)
-
-        if(cut.any()):
-            lng=lng[cut]
-            lat=lat[cut]
-            xyfp = optics_fp(lng, lat, self.opt_coeffs)
-            logging.debug("radec2pix: xyfp: {0}".format(xyfp))
-            logging.debug("radec2pix: xyfp Shape: {0}".format(xyfp.shape))
-            ccdpx, fitpix = mm_to_pix(self,xyfp)
-            logging.debug("radec2pix: xyfp: {0}".format(xyfp))
-            logging.debug("radec2pix: ccdpx: {0}".format(ccdpx))
-            logging.debug("radec2pix: fitpx: {0}".format(fitpix))
-            #return inCamera, ccdNum, fitsxpos, fitsypos, ccdxpos, ccdypos
-            return fitpix2pix(fitpix,ccdpx)
+        if np.atleast_1d(np.where(~isnone)[0] == [0, 1]).all():
+            self.coord_type = 'radec'
+        elif np.atleast_1d(np.where(~isnone)[0] == [2, 3]).all():
+            self.coord_type = 'pixels'
         else:
-            print('No specified targets in Field of View')
-            return
+            raise ValueError("Must pass either RA and Dec, or Column and Row.")
+
+        # Correct length
+        valid_lengths = len(np.unique([len(np.atleast_1d(getattr(self, attr))) for attr in attrs[np.where(~isnone)]])) == 1
+        if not valid_lengths:
+            raise ValueError("Must pass arrays of the same length.")
+        [setattr(self, attr, np.atleast_1d(getattr(self, attr))) for attr in attrs[np.where(~isnone)]]
+        self.nvals = len(np.atleast_1d(getattr(self, attrs[np.where(~isnone)[0][0]])))
+             
+    def __len__(self):
+        return self.nvals
+    
+    def __repr__(self):
+        if self.coord_type == 'pixels':
+            return f'TESSpoint ({self.nvals} Row/Column pairs)'
+        elif self.coord_type == 'radec':
+            return f'TESSpoint ({self.nvals} RA/Dec pairs)'
+        else:
+            return 'TESSpoint'
         
-def footprint(npoints=50):
-    """Gets the column and row points for CCD edges"""
-    column = np.hstack(
-        [
-            np.zeros(npoints),
-            np.linspace(0, 2048, npoints),
-            np.linspace(0, 2048, npoints),
-            np.ones(npoints) * 2048,
-        ]
-    )
-    row = np.hstack(
-        [
-            np.linspace(0, 2048, npoints),
-            np.zeros(npoints),
-            np.ones(npoints) * 2048,
-            np.linspace(0, 2048, npoints),
-        ]
-    )
-    return np.vstack([column, row]).T
-
-
-def xyrotate(angle, coords):
-    ca = np.cos((np.pi / 180.0) * angle)
-    sa = np.sin((np.pi / 180.0) * angle)
-    return np.vstack(
-        [ca * coords[:, 0] + sa * coords[:, 1], -sa * coords[:, 0] + ca * coords[:, 1]]
-    ).T.astype(coords.dtype)
-
-
-def rev_az_asym(coords):
-    asymang = 0.0
-    asymfac = 1.0
-    xypa = xyrotate(asymang, coords) * np.asarray([1 / asymfac, 1])
-    return xyrotate(-asymang, xypa)
-
-
-def r_of_tanth(z, opt_coeffs):
-    tanth = np.tan(z)
-    rfp0 = tanth * opt_coeffs[0]
-    rfp = np.sum(opt_coeffs[1:] * (tanth ** (2 * np.arange(5))[:, None]).T, axis=1)
-    return rfp0 * rfp
-
-
-def tanth_of_r_noscipy(rfp_times_rfp0, opt_coeffs):
-    zi = np.arctan(rfp_times_rfp0 ** 0.5 / opt_coeffs[0])
-    # Minimize...
-    # This is a way to minimize that
-    # 1) let's us minimize the whole vector and
-    # 2) doesn't use scipy, so we could do something similar in other scripting languates
-    # But it's not even close to optimal.
-    # If you pass in a lot of points this might fill up your memory though...
-    # ----
-    bounds = (0, 0.55)
-    resolution = 0.001
-    x = np.arange(*bounds, resolution)[:, None] * np.ones((1, len(zi)))
-    for count in range(3):
-        minimize = np.asarray(
-            [
-                (r_of_tanth(zi + x[idx], opt_coeffs) - rfp_times_rfp0) ** 2
-                for idx in range(x.shape[0])
-            ]
-        )
-        argmin = np.argmin(minimize, axis=0)
-        xmin = np.asarray([x[am, idx] for idx, am in enumerate(argmin)])
-        # Every iteration, scale down the offset to be narrower around the minimum
-        x = (x - xmin) * 0.25 + xmin
-    # ----
-    return xmin + zi
-
-def tanth_of_r(rfp_times_rfp0, opt_coeffs):
-    logging.debug("tanth_of_r: opt_coeffs: {0}".format(opt_coeffs))
-    if np.abs(rfp_times_rfp0) > 1.0e-10:
-        c0 = opt_coeffs[0]
-        zi = np.arctan(np.sqrt(rfp_times_rfp0) / c0)
-        def minFunc(z, opt_coeffs, rfp_times_rfp0):
-            rtmp = r_of_tanth(z, opt_coeffs)
-            return (rtmp - rfp_times_rfp0) ** 2
+    def __getitem__(self, idx):
+        if self.coord_type == 'radec':
+            return TESSpoint(ra=self.ra[idx], dec=self.dec[idx])
+        elif self.coord_type == 'pixels':
+            return TESSpoint(row=self.row[idx], column=self.column[idx])
+        else:
+            raise ValueError('No `coord_type` set.')
         
-        optResult = opt.minimize(minFunc, [zi], \
-                                 args=(opt_coeffs, rfp_times_rfp0), method='Nelder-Mead', \
-                                 tol=1.0e-10, \
-                                 options={'maxiter':500})
-        #print(optResult)
-        return optResult.x[0]
-    else:
-        return 0.0
+            
+    def to_RADec(self, sector:Optional[List] = None, camera:Optional[List] = None, ccd:Optional[List] = None):
+        if sector == None:
+            #By Default All Sectors
+            sector = range(self._sector_max)+1
+        if camera == None:
+            # By Default All Cameras
+            camera = range(self._camera_max)+1
+        if ccd == None:
+            # By Default All Cameras
+            ccd = range(self._ccd_max)+1
+        # Testing notes - test one happens if any single one of these is an int, wierd lists
+        # What are we returning? sector, camera, ccd, 
 
-def fp_optics(xyfp, opt_coeffs):
-    logging.debug("fp_optics: opt_coeffs: {0}".format(opt_coeffs))
+        for sector_iter in sector:
+            for camera_iter in camera:
+                for ccd_iter in ccd:
+                    SectorCameraCCD=TESSPointSCC(sector_iter,camera_iter,ccd_iter)
+                    iter_targets=SectorCameraCCD.pix2radec([self.column, self.row].T)
+                    fov_mask=iter_targets[1]
+                    #if fov_mask.any():         
+        raise NotImplementedError        
+        #return df # with dates?
+        
+    def to_Pixel(self, sector:Optional[List] = None, camera:Optional[List] = None, ccd:Optional[List] = None):
+        if sector == None:
+            #By Default All Sectors
+            sector = range(1,self._sector_max)
+        if camera == None:
+            # By Default All Cameras
+            camera = range(1,self._camera_max)
+        if ccd == None:
+            # By Default All Cameras
+            ccd = range(1,self._ccd_max)
+        # Clear any prior calculations, many to many mapping issues, rethink, ugh
+        self.obsId=[]
+        self.obsSector=[]
+        self.obsCamera=[]
+        self.obsCCD=[]
 
-    tanth_of_r_vectorize=np.vectorize(tanth_of_r, excluded=[1])
-
-    xy = rev_az_asym(xyfp)
-    rfp_times_rfp0 = np.sum(xy ** 2, axis=1) ** 0.5
-    phirad = np.arctan2(-xy[:, 1], -xy[:, 0])
-    phideg = phirad / (np.pi / 180.0) % 360
-    thetarad = tanth_of_r_vectorize(rfp_times_rfp0, opt_coeffs)
-    thetadeg = thetarad / (np.pi / 180.0)
-    return phideg, 90.0 - thetadeg
-
-
-def sphereToCart(ras, decs):
-    """Convert 3d spherical coordinates to cartesian"""
-    rarads = (np.pi / 180.0) * ras
-    decrads = (np.pi / 180.0) * decs
-    sinras = np.sin(rarads)
-    cosras = np.cos(rarads)
-    sindecs = np.sin(decrads)
-    cosdecs = np.cos(decrads)
-    vec0s = cosras * cosdecs
-    vec1s = sinras * cosdecs
-    vec2s = sindecs
-    return vec0s, vec1s, vec2s
-
-
-def eulerm323(eul):
-    mat1 = rotm1(2, eul[0])
-    mat2 = rotm1(1, eul[1])
-    mata = np.matmul(mat2, mat1)
-    mat1 = rotm1(2, eul[2])
-    rmat = np.matmul(mat1, mata)
-    return rmat
-
-
-def rotm1(ax, angle):
-    mat = np.zeros((3, 3), dtype=np.double)
-    n1 = ax
-    n2 = np.mod((n1 + 1), 3)
-    n3 = np.mod((n2 + 1), 3)
-    sinang = np.sin(angle)
-    cosang = np.cos(angle)
-    mat[n1][n1] = 1.0
-    mat[n2][n2] = cosang
-    mat[n3][n3] = cosang
-    mat[n2][n3] = sinang
-    mat[n3][n2] = -sinang
-    return mat
-
-
-def cartToSphere(vec):
-#   print("cartToSphere: vec: {0}".format(vec)) )# axis=1 breaking for 1 ra dec only
-#   norm = np.sqrt(np.sum(vec ** 2))
-#   dec = np.arcsin(vec[ 2] / norm)
-#   ra = np.arctan2(vec[ 1], vec[0])
-#   ra = np.mod(ra, 2.0 * np.pi)
-#breaking for 1 coord only, fix later
-   logging.debug("cartToSphere: vec: {0}".format(vec))
-   norm = np.sqrt(np.sum(vec ** 2, axis=1))
-   dec = np.arcsin(vec[:, 2] / norm)
-   ra = np.arctan2(vec[:, 1], vec[:, 0])
-   ra = np.mod(ra, 2.0 * np.pi)
-   return ra, dec
-
-def star_in_fov(lng, lat):
-    deg2rad = np.pi / 180.0
-    inView = False
-    if lat > 70.0:
-        vec = np.asarray(sphereToCart(lng, lat))
-        norm = np.sqrt(np.sum(vec ** 2))
-        if norm > 0.0:
-            vec = vec / norm
-            xlen = np.abs(np.arctan(vec[0] / vec[2]))
-            ylen = np.abs(np.arctan(vec[1] / vec[2]))
-            if (xlen <= (12.5 * deg2rad)) and (ylen <= (12.5 * deg2rad)):
-                inView = True
-    return inView
-
-
-def make_az_asym(coords):
-    # I dont think we need this function at all in the specific tess case where
-    # asymang=0 asymfac=1
-    # We're rotating a matrix by 0, multiplying its x coord by 1
-    # and re-rotating by -0
-
-    asymang = 0.0
-    asymfac = 1.0
-    xyp = xyrotate(asymang, coords)
-    logging.debug("make_az_asym: xyp: {0}".format(xyp))
-    logging.debug("make_az_asym: xyp: shape:  {0}".format(xyp.shape))
-
-    xypa = np.zeros_like(xyp)
-    xypa[:,0] = asymfac * xyp[:,0]
-    xypa[:,1] = xyp[:,1]
-    xyout = xyrotate(-asymang, xypa)
-    return xyout
-
-
-def optics_fp(lng_deg, lat_deg, opt_coeffs):
-    # Check Back Later For more Optimization
-    # angle to focal plane location, I think
-    # Had lines that recreated r_tanth, subbed the function in
-    # had np.power not **, speed v precision?  check r_tanth
-    deg2rad = np.pi / 180.0
-    thetar = np.pi / 2.0 - (lat_deg * deg2rad)
-
-    rtanth = r_of_tanth(thetar, opt_coeffs)
-
-    logging.debug("optics_fp: rtanth: {0}".format(rtanth))
-
-    cphi = np.cos(deg2rad * lng_deg)
-    sphi = np.sin(deg2rad * lng_deg)
-    logging.debug("optics_fp: cphi: {0}".format(cphi))
-    logging.debug("optics_fp: sphi: {0}".format(sphi))
-    xyfp = np.zeros((len(lng_deg),2), dtype=np.double)
-    xyfp[:,0] = -cphi * rtanth
-    xyfp[:,1] = -sphi * rtanth
-    logging.debug("optics_fp: xyfp: {0}".format(xyfp))
-    logging.debug("optics_fp: xyfp shape: {0}".format(xyfp.shape))
-
-    return make_az_asym(xyfp)
-
-
-def xy_to_ccdpx(self, xy):
-    xyb = np.zeros_like(xy)
-    ccdpx = np.zeros_like(xy)
-    ccdx0 = tess_params[self.camera][f"x0_ccd{self.ccd}"]
-    ccdy0 = tess_params[self.camera][f"y0_ccd{self.ccd}"]
-    ccdang = tess_params[self.camera][f"ang_ccd{self.ccd}"]
-    pixsz = 0.015000
-
-    xyb[:,0] = xy[:,0] - ccdx0
-    xyb[:,1] = xy[:,1] - ccdy0
-    xyccd = xyrotate(ccdang, xyb)
-    ccdpx[:,0] = (xyccd[:,0] / pixsz) - 0.5
-    ccdpx[:,1] = (xyccd[:,1] / pixsz) - 0.5
-    return ccdpx
-
-def mm_to_pix(self, xy):
-    # Convert focal plane to pixel location also need to add in the
-    #    auxillary pixels added into FFIs
-    #
-    #created xy_to_ccdpix function to minimize repeated math
-    #re-indiced ccd for 1-4 vs 03 given the the change in tess_param
-    CCDWD_T = 2048
-    CCDHT_T = 2058
-    ROWA = 44
-    ROWB = 44
-    COLDK_T = 20
-    fitpx = np.zeros_like(xy)
-    logging.debug("mm_to_pix: fitpx: {0}".format(fitpx))
-    logging.debug("mm_to_pix: fitpx.shape: {0}".format(fitpx.shape))
-
-
-    if self.ccd == 1:
-        ccdpx = xy_to_ccdpx(self, xy,)
-        fitpx[:,0] = (CCDWD_T - ccdpx[:,0]) + CCDWD_T + 2 * ROWA + ROWB - 1.0
-        fitpx[:,1] = (CCDHT_T - ccdpx[:,1]) + CCDHT_T + 2 * COLDK_T - 1.0
-    if self.ccd == 4:
-        ccdpx = xy_to_ccdpx(self, xy)
-        fitpx[:,0] = ccdpx[:,0] + CCDWD_T + 2 * ROWA + ROWB
-        fitpx[:,1] = ccdpx[:,1]
-    if self.ccd == 2:
-        ccdpx = xy_to_ccdpx(self, xy)
-        fitpx[:,0] = (CCDWD_T - ccdpx[:,0]) + ROWA - 1.0
-        fitpx[:,1] = (CCDHT_T - ccdpx[:,1]) + CCDHT_T + 2 * COLDK_T - 1.0
-    if self.ccd == 3:
-        ccdpx = xy_to_ccdpx(self, xy)
-        fitpx[:,0] = ccdpx[:,0] + ROWA
-        fitpx[:,1] = ccdpx[:,1]
-
-    return ccdpx, fitpx
-
-def fitpix2pix(fitpix,ccdpx):
-    # SPOC calibrated FFIs have 44 collateral pixels in x and are 1 based  
-    # Assuming combinedFits = False & args.noCollateral = False (for Now)
-    # In OG stars2px, xyUse choses between a few options depending on flags
-    # passed to stars2px, here we're making assumptions and will generalize after
-    xyUse = np.zeros(ccdpx.shape)
-    logging.debug("fitpix2pix: ccdpx: shape: {0}".format(ccdpx.shape))
-
-    xyUse[:,0] = ccdpx[:,0] + 45.0
-    xyUse[:,1] = ccdpx[:,1] + 1.0
-    xMin = 44.0
-    ymaxCoord = 2049
-    xmaxCoord = 2093
-    # visCut = xyUse[:,0]>xMin & xyUse[:,1]>0 & xyUse[:,0]<xmaxCoord & xyUse[:,1]<ymaxCoord
-    visCut=True
-    logging.debug("fitpix2pix: visCut: {0}".format(visCut))
-
-    if visCut: # only reun if everything is valid.  should this be any and just run on what passes?
-        findAny=True
-        edgeWarn = np.zeros(len(xyUse[:,0]))
-        edgePix = 6
-        edgeWarn = (xyUse[:,0]<=(xMin+edgePix)) | (xyUse[:,0]>=(xmaxCoord-edgePix)) | (xyUse[:,1]<=edgePix) | (xyUse[:,1]==(ymaxCoord-edgePix))
-    return xyUse, edgeWarn
+        # Testing notes - test one happens if any single one of these is an int, wierd lists
+        for sector_iter in sector:
+            for camera_iter in camera:
+                for ccd_iter in ccd:
+                    SectorCameraCCD=TESSPointSCC(sector_iter,camera_iter,ccd_iter)
+                    iter_targets=SectorCameraCCD.radec2pix(np.array([self.ra, self.dec]).T)
+                    fov_mask=iter_targets[0]
+                    if(fov_mask.any()):
+                        n_mask=self.ra[fov_mask].count_nonzero()
+                        #tess_stars2px.py has ecliptic long, lat, figure that out
+                        #iter_output=self.id[mask],self.ra[mask],self.dec[mask],iter_targets[0][0][mask],iter_targets[0][1][mask]
+                        self.obsId.append(self.id[fov_mask])
+                        self.obsSector.append([sector_iter]*n_mask)
+                        self.obsCamera.append([camera_iter]*n_mask)
+                        self.obsCCD.append([ccd_iter]*n_mask)
+                        self.column.append(iter_targets[1][:,0][fov_mask])
+                        self.row.append(iter_targets[1][:,1][fov_mask])
+        return self.obsId,self.obsSector,self.obsCamera,self.obsCCD,self.column,self.row
+        #return df # with dates?
+        
+    def ObservabilityMask(self, sectors:Optional[List] = None, cycle:Optional[List] = None):  
+        raise NotImplementedError
+        #return np.ndarray of bools
+        
+    def NumberOfObservations(self, sectors:Optional[List] = None, cycle:Optional[List] = None):  
+        raise NotImplementedError
+        #return np.ndarray of ints
